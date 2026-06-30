@@ -1,256 +1,151 @@
-# Forza Package Patcher
+# 🎮 Forza Horizon 6 — ZIP Asset Patcher Tools
 
-Ferramenta desenvolvida em Python para automatizar a aplicação de modificações em pacotes `Model.bin` e `SWATCH.BIN` utilizados por jogos da franquia **Forza Horizon**.
-
-O objetivo do projeto é eliminar o processo manual de extração, substituição e reconstrução desses pacotes, automatizando todas as etapas através de uma interface gráfica simples e da integração com o **QuickBMS**.
+> **Ferramentas de baixo nível para substituição de assets internos nos ZIPs da franquia Forza, sem corromper a validação interna do engine ForzaTech.**
 
 ---
 
-# Visão Geral
+## ⚠️ Por que essas ferramentas existem?
 
-Durante o desenvolvimento de modificações para jogos da franquia Forza Horizon, diversos recursos do jogo encontram-se armazenados em arquivos compactados como:
+O engine **ForzaTech** (usado em Forza Horizon e Forza Motorsport) empacota os assets de cada carro — modelos 3D, texturas, luzes, presets — dentro de arquivos **ZIP internos**. Porém, ao contrário de um ZIP comum, o jogo executa uma **validação estrutural rigorosa** ao carregar esses arquivos:
 
-- Model.bin
-- SWATCH.BIN
+- Verifica o **CRC-32** de cada entrada no Local Header e no Central Directory
+- Valida os **tamanhos comprimidos e descomprimidos** em ambos os cabeçalhos
+- Verifica os **offsets absolutos** de todas as entradas no Central Directory
+- Verifica o **offset do Central Directory** no End of Central Directory (EOCD)
 
-A alteração manual desses arquivos normalmente exige diversas etapas repetitivas:
+Se qualquer um desses valores estiver inconsistente — mesmo que o conteúdo do arquivo esteja correto — **o jogo crasha imediatamente** ou rejeita o asset silenciosamente.
 
-- localizar o pacote correto;
-- extrair seu conteúdo;
-- substituir os arquivos modificados;
-- reconstruir o pacote;
-- remover arquivos temporários.
-
-Este projeto automatiza completamente esse fluxo de trabalho, reduzindo erros humanos e tornando o processo muito mais rápido.
+Ferramentas convencionais de ZIP (WinRAR, 7-Zip, Python `zipfile`) **reconstroem** o arquivo ao salvar, alterando offsets e invalidando a estrutura esperada pelo jogo. Por isso foi necessário desenvolver um **patcher in-place** que edita o ZIP diretamente em memória, byte a byte, preservando toda a estrutura original intacta.
 
 ---
 
-# Funcionalidades
+## 🛠️ Ferramentas incluídas
 
-## Model.bin Patcher
+### 1. `modelbin_patcher.py` — Neon Underglow Patcher
 
-Permite modificar arquivos **Model.bin** através de um processo totalmente automatizado.
+Permite injetar até **três arquivos simultaneamente** no ZIP de um carro:
 
-Fluxo executado:
+| Arquivo | Função |
+|---|---|
+| `*.modelbin` | Modelo 3D do neon undercarriage (geometria + materiais emissivos) |
+| `Lights.bin` | Definição das fontes de luz do neon |
+| `LightPresets.bin` | Presets de cor e intensidade das luzes |
 
-1. Seleção do arquivo Model.bin.
-2. Extração automática utilizando QuickBMS.
-3. Criação da estrutura temporária.
-4. Localização dos arquivos do patch.
-5. Substituição apenas dos recursos modificados.
-6. Reconstrução automática do pacote.
-7. Limpeza dos arquivos temporários.
-8. Exibição do resultado ao usuário.
-
----
-
-## SWATCH.BIN Patcher
-
-Responsável pela aplicação de modificações em pacotes de texturas.
-
-O processo segue praticamente o mesmo fluxo do Model.bin, adaptado para arquivos SWATCH.BIN.
-
-Etapas:
-
-- Extração
-- Substituição dos arquivos
-- Reconstrução
-- Limpeza automática
+**Funcionalidades:**
+- Checkboxes individuais para selecionar quais arquivos aplicar
+- Compressão DEFLATE multi-nível (testa levels 1–9, escolhe o menor que caiba no espaço original)
+- Padding automático com zeros quando o arquivo novo é menor que o original
+- Expansão controlada do ZIP quando o arquivo novo é maior (com aviso de risco de crash)
+- Atualização correta de todos os offsets do Central Directory e EOCD após expansão
+- Backup automático antes de qualquer modificação
 
 ---
 
-# Interface
+### 2. `swatchbin_patcher.py` — Swatchbin Patcher
 
-A aplicação utiliza Tkinter para fornecer uma interface gráfica simples.
+Substitui arquivos **`.swatchbin`** (paletas de textura/cor) no ZIP do jogo.
 
-O usuário apenas precisa:
-
-- selecionar o pacote original;
-- selecionar a pasta do patch;
-- iniciar o processo.
-
-Todo o restante é realizado automaticamente.
-
----
-
-# Tecnologias Utilizadas
-
-- Python 3
-- Tkinter
-- QuickBMS
-- pathlib
-- shutil
-- subprocess
-- tempfile
-- os
+**Funcionalidades:**
+- Busca o arquivo-alvo por nome dentro do ZIP (sem distinção de maiúsculas)
+- Compara CRC-32 antes de recomprimir: se o conteúdo for idêntico, reutiliza os bytes comprimidos originais sem reprocessamento
+- Testa **36 combinações** de nível de compressão (1–9) × estratégia DEFLATE (`DEFAULT`, `FILTERED`, `HUFFMAN_ONLY`, `RLE`) para encontrar a melhor compressão possível
+- Suporte completo a expansão do ZIP com atualização dos offsets
+- Restauração de backup com um clique
 
 ---
 
-# Estrutura do Projeto
+## 🔬 Como o patch funciona (detalhes técnicos)
 
 ```
-Forza Package Patcher
-│
-├── modelbin_patcher.py
-├── swatchbin_patcher.py
-├── README.md
-├── LICENSE
-└── .gitignore
+ZIP original (em memória como bytearray):
+┌─────────────────────────────────────────────────────────┐
+│  Local Header (PK\x03\x04)                              │
+│    ├─ CRC-32             ← atualizado                   │
+│    ├─ Compressed size    ← preservado ou atualizado     │
+│    └─ Uncompressed size  ← atualizado                   │
+│  [dados comprimidos]     ← substituídos in-place        │
+│  ...outros arquivos...                                  │
+│  Central Directory (PK\x01\x02)                         │
+│    ├─ CRC-32             ← atualizado                   │
+│    ├─ Compressed size    ← atualizado                   │
+│    ├─ Uncompressed size  ← atualizado                   │
+│    └─ Offset do header   ← corrigido para todos os      │
+│                             arquivos após o modificado  │
+│  End of Central Directory (PK\x05\x06)                  │
+│    └─ Offset do CD       ← corrigido se ZIP expandiu   │
+└─────────────────────────────────────────────────────────┘
 ```
 
----
+### Caso 1 — Arquivo novo ≤ espaço original
+O arquivo novo é comprimido e **ocupa exatamente o mesmo espaço** do original no ZIP, com padding de bytes nulos no final. Nenhum offset é alterado. O jogo não percebe nenhuma diferença estrutural — apenas o conteúdo mudou.
 
-# Arquitetura
-
-A aplicação foi dividida em dois módulos independentes.
-
-## modelbin_patcher.py
-
-Responsável pelo processamento de arquivos Model.bin.
-
-Funções principais:
-
-- Interface gráfica
-- Seleção de arquivos
-- Extração do pacote
-- Aplicação do patch
-- Reconstrução
-- Limpeza
+### Caso 2 — Arquivo novo > espaço original
+O ZIP precisa ser expandido. Neste caso:
+1. Os bytes novos são inseridos na posição correta
+2. Todos os **offsets do Central Directory** de entradas que vêm depois do arquivo modificado são incrementados pelo `size_diff`
+3. O **offset do Central Directory** no EOCD também é incrementado
+4. O usuário é avisado sobre o risco de crash (o ForzaTech pode rejeitar ZIPs expandidos em alguns casos)
 
 ---
 
-## swatchbin_patcher.py
+## 📋 Requisitos
 
-Responsável pelo processamento dos arquivos SWATCH.BIN.
-
-Implementa o mesmo fluxo de trabalho adaptado para pacotes de texturas.
+- Python **3.8+**
+- Biblioteca padrão apenas (`tkinter`, `zipfile`, `zlib`, `struct`, `shutil`) — **sem dependências externas**
 
 ---
 
-# Fluxo de Processamento
+## 🚀 Como usar
+
+```bash
+# Clone o repositório
+git clone https://github.com/seu-usuario/forza-zip-patcher.git
+cd forza-zip-patcher
+
+# Execute o patcher de modelbins/neon
+python modelbin_patcher.py
+
+# Execute o patcher de texturas/swatchbin
+python swatchbin_patcher.py
+```
+
+### Fluxo básico
+
+1. Selecione o **ZIP do carro** extraído do jogo
+2. Selecione o(s) **arquivo(s) modificado(s)** que deseja injetar
+3. Clique em **⚡ Aplicar Patch**
+4. Um backup `.backup` é criado automaticamente antes de qualquer modificação
+5. Teste o jogo — em caso de problema, clique em **🔄 Restaurar Backup**
+
+---
+
+## 📁 Estrutura do repositório
 
 ```
-Usuário
-    │
-    ▼
-Seleciona o pacote
-    │
-    ▼
-QuickBMS extrai o conteúdo
-    │
-    ▼
-Arquivos modificados são copiados
-    │
-    ▼
-Pacote é reconstruído
-    │
-    ▼
-Arquivos temporários removidos
-    │
-    ▼
-Processo finalizado
+forza-zip-patcher/
+├── modelbin_patcher.py    # Neon Underglow Patcher (modelbin + lights + lightpresets)
+├── swatchbin_patcher.py   # Swatchbin Patcher (texturas/paletas de cor)
+└── README.md
 ```
 
 ---
 
-# Integração com QuickBMS
+## 🧠 Contexto e motivação
 
-A ferramenta utiliza o QuickBMS como mecanismo responsável pela extração e reconstrução dos pacotes.
+Este projeto nasceu durante o modding de um **BMW M4WP 21** em Forza Horizon 6, com o objetivo de adicionar **iluminação neon interna** ao veículo usando o ForzaTech Studio. 
 
-Todo o processo é executado automaticamente em segundo plano.
+Durante o processo ficou evidente que nenhuma ferramenta disponível publicamente era capaz de substituir assets dentro dos ZIPs do ForzaTech sem corromper a estrutura interna. Qualquer tentativa com ferramentas convencionais resultava em crash imediato do jogo.
 
-O usuário não precisa utilizar o QuickBMS manualmente.
-
----
-
-# Tratamento de Arquivos Temporários
-
-Durante a execução são criados diretórios temporários para:
-
-- extração;
-- processamento;
-- substituição dos arquivos;
-- reconstrução do pacote.
-
-Após a conclusão, esses diretórios são removidos automaticamente.
+A solução foi engenharia reversa do formato ZIP conforme implementado pelo ForzaTech, resultando nessas ferramentas de edição direta em memória.
 
 ---
 
-# Tratamento de Erros
+## ⚠️ Aviso
 
-O programa realiza verificações durante todas as etapas do processo.
-
-Entre elas:
-
-- existência dos arquivos;
-- validade dos diretórios;
-- localização do QuickBMS;
-- erros durante a extração;
-- falhas durante a reconstrução.
-
-Sempre que possível são exibidas mensagens amigáveis ao usuário.
+Este projeto é feito para fins educacionais e de modding pessoal. Use por sua conta e risco. Sempre mantenha backups dos arquivos originais do jogo.
 
 ---
 
-# Requisitos
+## 📄 Licença
 
-- Python 3.10+
-- QuickBMS
-- Script BMS compatível com o formato do pacote
-- Sistema Operacional Windows
-
----
-
-# Como Utilizar
-
-1. Execute o programa.
-
-2. Escolha o arquivo:
-
-```
-Model.bin
-```
-
-ou
-
-```
-SWATCH.BIN
-```
-
-3. Selecione a pasta contendo os arquivos modificados.
-
-4. Clique em **Patch**.
-
-5. Aguarde a conclusão.
-
----
-
-# Vantagens
-
-- Interface simples
-- Processo automatizado
-- Menor risco de erros durante a substituição dos arquivos
-- Elimina etapas manuais repetitivas
-- Organização automática dos arquivos temporários
-
----
-
-# Objetivo
-
-Este projeto foi desenvolvido para simplificar o fluxo de trabalho durante a modificação de recursos utilizados por jogos da franquia Forza Horizon, automatizando tarefas que normalmente exigem múltiplas ferramentas e diversas etapas manuais.
-
----
-
-# Licença
-
-Este projeto está licenciado sob a licença MIT.
-
----
-
-# Autor
-
-Desenvolvido por **Lucas (nolonlucas)**
-
-GitHub:
-
-https://github.com/nolonlucas
+MIT License — sinta-se livre para usar, modificar e distribuir.
